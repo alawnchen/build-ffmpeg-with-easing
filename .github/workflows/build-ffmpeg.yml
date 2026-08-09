@@ -19,7 +19,8 @@ jobs:
             autoconf automake libtool      \
             libtool-bin m4                 \
             patch meson autogen gperf pax  \
-            cvs ragel
+            cvs ragel                      \
+            autoconf-archive
 
       - name: Clone ffmpeg-windows-build-helpers
         run: git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
@@ -40,11 +41,22 @@ jobs:
           git add -A
           git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
+      - name: Fix mpg123 autotools configuration
+        run: |
+          cd ffmpeg-windows-build-helpers
+          # 如果 mpg123 的 configure 脚本不存在，运行 autoreconf
+          if [ -d "sandbox/win64/mpg123_svn" ]; then
+            cd sandbox/win64/mpg123_svn
+            autoreconf -fvi
+            cd ../../..
+          fi
+
       - name: Run cross-compile script
         run: |
           cd ffmpeg-windows-build-helpers
           export TERM=dumb
           export FFMPEG_GIT_URL="file:///tmp/ffmpeg_patched"
+          export LIBTOOLIZE=libtoolize
           ./cross_compile_ffmpeg.sh \
             --compiler-flavors=win64 \
             --disable-nonfree=y
