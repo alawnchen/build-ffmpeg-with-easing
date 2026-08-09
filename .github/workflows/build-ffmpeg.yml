@@ -44,20 +44,28 @@ jobs:
       - name: Fix mpg123 autotools configuration
         run: |
           cd ffmpeg-windows-build-helpers
-          # 如果 mpg123 的 configure 脚本不存在，运行 autoreconf
+          # 预先准备 mpg123 的 autotools 文件
           if [ -d "sandbox/win64/mpg123_svn" ]; then
             cd sandbox/win64/mpg123_svn
-            autoreconf -fvi
+            # 清理之前的 autotools 生成的文件
+            rm -f configure config.h config.log config.status Makefile
+            rm -rf autom4te.cache
+            # 安装 autotools 必需的文件
+            libtoolize --force --copy || glibtoolize --force --copy
+            aclocal -I m4 2>/dev/null || true
+            autoconf
+            automake --add-missing --copy --force-missing 2>/dev/null || true
             cd ../../..
           fi
 
       - name: Patch build script to use GitHub mirrors for config.guess and config.sub
         run: |
           cd ffmpeg-windows-build-helpers
-          # Replace config.guess download URL with GitHub mirror
-          sed -i "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.guess|g" patches/mingw-w64-build-r22.local
-          # Replace config.sub download URL with GitHub mirror
-          sed -i "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.sub|g" patches/mingw-w64-build-r22.local
+          # Find and patch all shell script files that download config.guess/config.sub
+          find . -type f -name "*.sh" -exec sed -i \
+            "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.guess|g" {} \;
+          find . -type f -name "*.sh" -exec sed -i \
+            "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.sub|g" {} \;
 
       - name: Run cross-compile script
         run: |
