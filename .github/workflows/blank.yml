@@ -1,0 +1,132 @@
+name: Build FFmpeg xfade‑easing Win64
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cross compile toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y git wget build-essential mingw-w64-x86-64-gcc nasm yasm pkg-config libz-dev cmake
+
+      - name: Prepare build dir
+        run: mkdir -p build_deps out
+
+      - name: Build libx264
+        run: |
+          cd build_deps
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          cd x264
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --prefix=$(pwd)/../../out/x264 \
+            --enable-static \
+            --disable-shared
+          make -j$(nproc)
+          make install
+
+      - name: Build libx265
+        run: |
+          cd build_deps
+          git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git
+          cd x265_git/source
+          cmake -DCMAKE_TOOLCHAIN_FILE=../../../mingw64-toolchain.cmake \
+            -DCMAKE_INSTALL_PREFIX=$(pwd)/../../../out/x265 \
+            -DENABLE_SHARED=OFF -DENABLE_STATIC=ON .
+          make -j$(nproc)
+          make install
+        env:
+          CMAKE_TOOLCHAIN_FILE_CONTENT: |
+            set(CMAKE_SYSTEM_NAME Windows)
+            set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+            set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+            set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+            set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+            set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+            set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+            set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+
+      - name: Generate mingw cmake toolchain
+        run: |
+          cat > build_deps/mingw64-toolchain.cmake <<'EOT'
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+EOT
+
+      - name: Build libvpx (vp8/vp9)
+        run: |
+          cd build_deps
+          git clone --depth 1 https://chromium.googlesource.com/webm/libvpx.git
+          cd libvpx
+          ./configure \
+            --target=x86_64-win64-gcc \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --prefix=$(pwd)/../../out/libvpx \
+            --enable-static \
+            --disable-shared \
+            --enable-vp9 \
+            --disable-examples \
+            --disable-unit-tests
+          make -j$(nproc)
+          make install
+
+      - name: Clone FFmpeg n8.0 & apply xfade‑easing patch
+        run: |
+          git clone --depth 1 --branch n8.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          cd ffmpeg
+          git clone https://github.com/scriptituk/xfade-easing.git xfade_easing
+          cp xfade_easing/src/xfade-easing.h libavfilter/
+          patch -p1 < xfade_easing/src/vf_xfade.patch
+
+      - name: Configure FFmpeg cross‑build
+        run: |
+          cd ffmpeg
+          export PKG_CONFIG_PATH=$(pwd)/../out/x264/lib/pkgconfig:$(pwd)/../out/x265/lib/pkgconfig:$(pwd)/../out/libvpx/lib/pkgconfig
+          ./configure \
+            --prefix=$(pwd)/out-win64 \
+            --target-os=win64 \
+            --arch=x86_64 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --enable-gpl \
+            --enable-zlib \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libvpx \
+            --enable-ffmpeg \
+            --enable-ffprobe \
+            --disable-libsvtav1 \
+            --disable-libsvthevc \
+            --disable-nonfree \
+            --pkg-config=pkg-config
+
+      - name: Compile FFmpeg
+        run: |
+          cd ffmpeg
+          make -j$(nproc)
+          make install
+
+      - name: Collect binaries
+        run: |
+          cp ffmpeg/out-win64/bin/ffmpeg.exe ./ffmpeg-xfade-easing.exe
+          cp ffmpeg/out-win64/bin/ffprobe.exe ./ffprobe-xfade-easing.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-xfade-easing-win64
+          paths:
+            - ./ffmpeg-xfade-easing.exe
+            - ./ffprobe-xfade-easing.exe
+          retention-days: 14
