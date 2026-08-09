@@ -17,7 +17,8 @@ jobs:
             gcc-mingw-w64-x86-64           \
             g++-mingw-w64-x86-64           \
             autoconf automake libtool      \
-            patch
+            patch meson autogen gperf pax  \
+            cvs ragel
 
       - name: Clone ffmpeg-windows-build-helpers
         run: git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
@@ -38,13 +39,10 @@ jobs:
           git add -A
           git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
-      # 先输出脚本帮助，确认真实可用参数（可选）
-      - name: Show script help
-        run: cd ffmpeg-windows-build-helpers && ./cross_compile_ffmpeg.sh --help || true
-
       - name: Run cross-compile script
         run: |
           cd ffmpeg-windows-build-helpers
+          export TERM=dumb
           export FFMPEG_GIT_URL="file:///tmp/ffmpeg_patched"
           ./cross_compile_ffmpeg.sh \
             --compiler-flavors=win64 \
