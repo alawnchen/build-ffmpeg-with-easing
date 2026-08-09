@@ -1,4 +1,4 @@
-name: Build FFmpeg (Windows x64) with xfade-easing
+name: Build FFmpeg (Windows) with xfade-easing
 
 on:
   workflow_dispatch:
@@ -31,11 +31,12 @@ jobs:
 
       # ----------------------------------------------
       # 3. 准备打过 xfade-easing 补丁的 FFmpeg 源码
-      #     （作为本地 git 仓库，供脚本直接使用）
       # ----------------------------------------------
       - name: Prepare patched FFmpeg source
         run: |
-          # 克隆 FFmpeg 官方 n8.0 分支
+          set -e  # 任何命令失败立即退出
+
+          # 克隆 FFmpeg n8.0（请根据补丁兼容性调整分支）
           git clone --depth 1 --branch n8.0 \
             https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg_patched
 
@@ -44,34 +45,43 @@ jobs:
           # 获取 xfade-easing 补丁
           git clone https://github.com/scriptituk/xfade-easing.git xfade_easing
           cp xfade_easing/src/xfade-easing.h libavfilter/
+
+          # 检查补丁能否干用（--dry-run 不会实际修改）
+          echo "::group::Check patch applicability"
+          if ! patch --dry-run -p1 < xfade_easing/src/vf_xfade.patch; then
+            echo "::error::Patch does not apply cleanly. Check FFmpeg version compatibility."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # 正式打补丁
           patch -p1 < xfade_easing/src/vf_xfade.patch
 
-          # 将补丁提交为本地 commit，避免 git clone 报 dirty 警告
+          # 提交为本地 commit
           git add -A
-          git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing patch"
+          git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
+
+          echo "Patched FFmpeg source ready at /tmp/ffmpeg_patched"
 
       # ----------------------------------------------
-      # 4. 执行交叉编译（使用本地 FFmpeg 仓库）
+      # 4. 执行交叉编译（使用本地已打补丁的目录）
       # ----------------------------------------------
       - name: Run cross-compile script
         run: |
           cd ffmpeg-windows-build-helpers
 
-          # 强制脚本使用我们打补丁的源码
-          export FFMPEG_GIT_URL="file:///tmp/ffmpeg_patched"
-
-          # 开始编译
           ./cross_compile_ffmpeg.sh \
-            --compiler-flavors=win64        \
-            --disable-nonfree=y             \
-            --build-ffprobe=y               \
-            --build-libx264=y               \
-            --build-libx265=y               \
-            --build-libvpx=y                \
-            --high-bitdepth=n               \
-            --build-intel-qsv=n             \
-            --build-amd-amf=n               \
-            --ffmpeg-git-checkout-version=HEAD
+            --compiler-flavors=win64          \
+            --disable-nonfree=y               \
+            --build-ffprobe=y                 \
+            --build-libx264=y                 \
+            --build-libx265=y                 \
+            --build-libvpx=y                  \
+            --ffmpeg-git-dir=/tmp/ffmpeg_patched \
+            --ffmpeg-git-checkout-version=HEAD  \
+            --high-bitdepth=n                 \
+            --build-intel-qsv=n               \
+            --build-amd-amf=n
 
       # ----------------------------------------------
       # 5. 收集并上传编译产物
