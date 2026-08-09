@@ -1,54 +1,65 @@
 name: Build FFmpeg with xfade‑easing
 on:
-  workflow_dispatch:  # 手动触发，点仓库 Actions 页面手动运行
-  # push:
-  #   branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu‑24.04
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout empty repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y git wget build-essential mingw‑w64 python3‑setuptools
+          sudo apt install -y git wget build-essential mingw-w64 python3-setuptools
 
-      - name: Clone ffmpeg‑windows‑build‑helpers
-        run: git clone https://github.com/rdp/ffmpeg‑windows‑build‑helpers.git
+      - name: Clone build helpers
+        run: git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
 
-      - name: Patch build_ffmpeg to inject xfade‑easing
+      - name: Inject xfade‑easing patch code
         run: |
-          cd ffmpeg‑windows‑build‑helpers
-          # 在 build_ffmpeg 函数内部，cd 到ffmpeg源码目录之后，configure之前插入打补丁代码
-          sed -i '/build_ffmpeg() {/,/^}/{
-          /cd "\$output_dir"/a\
-git clone https://github.com/scriptituk/xfade‑easing.git xfade_src\
-cp xfade_src/src/xfade‑easing.h libavfilter/\
-patch -p1 < xfade_src/src/vf_xfade.patch
-          }' cross_compile_ffmpeg.sh
+          cd ffmpeg-windows-build-helpers
+          cat > inject_patch.sh <<'EOF'
+#!/bin/bash
+# 在build_ffmpeg函数中，cd "$output_dir"之后插入打补丁
+awk '
+/build_ffmpeg\(\) \{ {infunc=1}
+infunc==1 && /cd "\$output_dir"/ {
+    print $0
+    print "git clone https://github.com/scriptituk/xfade-easing.git xfade_src"
+    print "cp xfade_src/src/xfade-easing.h libavfilter/"
+    print "patch -p1 < xfade_src/src/vf_xfade.patch"
+    infunc=0
+    next
+}
+1
+' cross_compile_ffmpeg.sh > tmp.sh
+mv tmp.sh cross_compile_ffmpeg.sh
+chmod +x cross_compile_ffmpeg.sh
+EOF
+          chmod +x inject_patch.sh
+          ./inject_patch.sh
 
-      - name: Run cross compile (FFmpeg n8.0, static, no nonfree)
+      - name: Cross compile ffmpeg n8.0 static
         run: |
-          cd ffmpeg‑windows‑build‑helpers
+          cd ffmpeg-windows-build-helpers
           ./cross_compile_ffmpeg.sh \
-            --ffmpeg‑git‑checkout‑version=n8.0 \
-            --build‑non‑free=n \
-            --build‑ffmpeg‑static=y \
-            --disable‑opencl=y
+            --ffmpeg-git-checkout-version=n8.0 \
+            --build-non-free=n \
+            --build-ffmpeg-static=y \
+            --disable-opencl=y
 
-      - name: Collect artifacts
+      - name: Collect binaries
         run: |
-          cp ffmpeg‑windows‑build‑helpers/sandbox/win64/ffmpeg_git/ffmpeg.exe ./ffmpeg‑xfade‑easing.exe
-          cp ffmpeg‑windows‑build‑helpers/sandbox/win64/ffmpeg_git/ffprobe.exe ./ffprobe‑xfade‑easing.exe
+          cp ffmpeg-windows-build-helpers/sandbox/win64/ffmpeg_git/ffmpeg.exe ./ffmpeg-xfade-easing.exe
+          cp ffmpeg-windows-build-helpers/sandbox/win64/ffmpeg_git/ffprobe.exe ./ffprobe-xfade-easing.exe
 
       - name: Upload artifact
-        uses: actions/upload‑artifact@v4
+        uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg‑xfade‑easing‑win64
+          name: ffmpeg-xfade-easing-win64
           paths: |
-            ./ffmpeg‑xfade‑easing.exe
-            ./ffprobe‑xfade‑easing.exe
-          retention‑days: 14
+            ./ffmpeg-xfade-easing.exe
+            ./ffprobe-xfade-easing.exe
+          retention-days: 14
