@@ -41,6 +41,14 @@ jobs:
           git add -A
           git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
+      - name: Pre-download config.guess from GitHub mirror
+        run: |
+          mkdir -p ffmpeg-windows-build-helpers/sandbox/cross_compilers/pkgs
+          cd ffmpeg-windows-build-helpers/sandbox/cross_compilers/pkgs
+          wget -nv -O config.guess 'https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess' || \
+          wget -nv -O config.guess 'https://raw.githubusercontent.com/autoconf-mirror/autoconf/master/build-aux/config.guess' || \
+          echo "Warning: Failed to pre-download config.guess, will rely on script's fallback"
+
       - name: Fix mpg123 autotools configuration
         run: |
           cd ffmpeg-windows-build-helpers
