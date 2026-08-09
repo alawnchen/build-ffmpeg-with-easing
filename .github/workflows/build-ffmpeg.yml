@@ -47,7 +47,6 @@ jobs:
           ./cross_compile_ffmpeg.sh \
             --compiler-flavors=win64          \
             --disable-nonfree=y               \
-            --build-ffprobe=y                 \
             --build-libx264=y                 \
             --build-libx265=y                 \
             --build-libvpx=y                  \
