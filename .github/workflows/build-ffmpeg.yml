@@ -17,6 +17,7 @@ jobs:
             gcc-mingw-w64-x86-64           \
             g++-mingw-w64-x86-64           \
             autoconf automake libtool      \
+            libtool-bin m4                 \
             patch meson autogen gperf pax  \
             cvs ragel
 
