@@ -12,10 +12,23 @@ jobs:
       - name: Install cross compile toolchain
         run: |
           sudo apt update
-          sudo apt install -y git wget build-essential mingw-w64-x86-64-gcc nasm yasm pkg-config libz-dev cmake
+          sudo apt install -y git wget build-essential mingw-w64-x86-64-gcc mingw-w64-x86-64-g++ nasm yasm pkg-config libz-dev cmake
 
       - name: Prepare build dir
         run: mkdir -p build_deps out
+
+      - name: Generate mingw cmake toolchain
+        run: |
+          cat > build_deps/mingw64-toolchain.cmake <<'EOT'
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+          set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOT
 
       - name: Build libx264
         run: |
@@ -41,31 +54,8 @@ jobs:
             -DENABLE_SHARED=OFF -DENABLE_STATIC=ON .
           make -j$(nproc)
           make install
-        env:
-          CMAKE_TOOLCHAIN_FILE_CONTENT: |
-            set(CMAKE_SYSTEM_NAME Windows)
-            set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-            set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
-            set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
-            set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
-            set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-            set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-            set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 
-      - name: Generate mingw cmake toolchain
-        run: |
-          cat > build_deps/mingw64-toolchain.cmake <<'EOT'
-set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
-set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
-set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-EOT
-
-      - name: Build libvpx (vp8/vp9)
+      - name: Build libvpx
         run: |
           cd build_deps
           git clone --depth 1 https://chromium.googlesource.com/webm/libvpx.git
