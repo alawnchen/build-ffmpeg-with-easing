@@ -47,9 +47,6 @@ jobs:
           ./cross_compile_ffmpeg.sh \
             --compiler-flavors=win64          \
             --disable-nonfree=y               \
-            --build-libx264=y                 \
-            --build-libx265=y                 \
-            --build-libvpx=y                  \
             --ffmpeg-git-dir=/tmp/ffmpeg_patched \
             --ffmpeg-git-checkout-version=HEAD  \
             --high-bitdepth=n                 \
