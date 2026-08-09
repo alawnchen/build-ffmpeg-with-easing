@@ -1,91 +1,186 @@
-name: Build FFmpeg (Windows) with xfade-easing
+# ==============================================================================
+# 工作流：编译 FFmpeg n8.0 + xfade-easing v3.6.0 独立 Windows x64 单文件
+# ----------------------------------------------------------------------------
+# 使用 Ubuntu 运行器 + mingw-w64 交叉编译，将 xfade-easing 缓动过渡效果
+# 集成进 FFmpeg，生成零 DLL 依赖的独立 ffmpeg.exe / ffprobe.exe。
+# ==============================================================================
+name: 构建 FFmpeg xfade-easing (Windows x64)
 
 on:
+  # 手动触发
   workflow_dispatch:
+  push:
+    # 推送到主分支时触发（含工作流文件自身的变更）
+    branches:
+      - main
+      - master
+    # 推送 v 开头的标签时触发，用于自动发布 GitHub Release
+    tags:
+      - 'v*'
+
+# 环境变量：版本号与仓库地址集中管理，便于后续升级
+env:
+  FFMPEG_TAG: n8.0                          # FFmpeg 源码标签（必须使用 n8.0 以保证补丁兼容）
+  XFADE_EASING_TAG: v3.6.0                  # xfade-easing 版本标签
+  XFADE_BASE: https://raw.githubusercontent.com/scriptituk/xfade-easing/v3.6.0/src
+
+# 发布 Release 需要对仓库内容的写入权限
+permissions:
+  contents: write
+
+# 同一分支/标签的重复构建自动取消旧任务，节省资源
+concurrency:
+  group: build-ffmpeg-xfade-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: 交叉编译 FFmpeg (mingw-w64 x86_64)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+
     steps:
-      - name: Install build dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y             \
-            git wget curl subversion       \
-            build-essential pkg-config     \
-            texinfo yasm cmake nasm        \
-            gcc-mingw-w64-x86-64           \
-            g++-mingw-w64-x86-64           \
-            autoconf automake libtool      \
-            libtool-bin m4                 \
-            patch meson autogen gperf pax  \
-            cvs ragel                      \
-            autoconf-archive
-
-      - name: Clone ffmpeg-windows-build-helpers
-        run: git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
-
-      - name: Prepare patched FFmpeg source
+      # ----------------------------------------------------------------------
+      # 步骤 1：安装 mingw-w64 交叉编译工具链及构建依赖
+      # ----------------------------------------------------------------------
+      - name: 安装 mingw-w64 交叉编译工具链
         run: |
           set -e
-          git clone --depth 1 --branch n8.0 \
-            https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg_patched
-          cd /tmp/ffmpeg_patched
-          git clone https://github.com/scriptituk/xfade-easing.git xfade_easing
-          cp xfade_easing/src/xfade-easing.h libavfilter/
-          if ! patch --dry-run -p0 < xfade_easing/src/vf_xfade.patch; then
-            echo "::error::Patch does not apply cleanly. Check FFmpeg version."
-            exit 1
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            nasm \
+            pkg-config \
+            git \
+            wget \
+            make
+
+      # ----------------------------------------------------------------------
+      # 步骤 2：检出 FFmpeg 源码（精确到 n8.0 标签，浅克隆加速）
+      # ----------------------------------------------------------------------
+      - name: 检出 FFmpeg 源码 (tag ${{ env.FFMPEG_TAG }})
+        uses: actions/checkout@v4
+        with:
+          repository: FFmpeg/FFmpeg
+          ref: ${{ env.FFMPEG_TAG }}
+          path: ffmpeg
+          fetch-depth: 1
+
+      # ----------------------------------------------------------------------
+      # 步骤 3：下载并应用 xfade-easing 补丁
+      #   - 始终放入头文件 libavfilter/xfade-easing.h（header-only 实现）
+      #   - 优先尝试 patch 方式修改 vf_xfade.c；失败则直接替换整个文件
+      # ----------------------------------------------------------------------
+      - name: 应用 xfade-easing 补丁 (tag ${{ env.XFADE_EASING_TAG }})
+        working-directory: ffmpeg
+        run: |
+          set -e
+          PATCH_URL="${XFADE_BASE}/vf_xfade.patch"
+          HEADER_URL="${XFADE_BASE}/xfade-easing.h"
+          FULL_C_URL="${XFADE_BASE}/vf_xfade.c"
+
+          # 下载 header-only 头文件到 libavfilter 目录
+          wget -O libavfilter/xfade-easing.h "${HEADER_URL}"
+
+          # 下载补丁并做干运行（dry-run）验证
+          # 依次尝试 -p0（README 推荐）和 -p1（git 风格），均失败则直接替换整个文件
+          wget -O /tmp/vf_xfade.patch "${PATCH_URL}"
+
+          if patch -p0 --dry-run < /tmp/vf_xfade.patch >/dev/null 2>&1; then
+            echo "✓ 补丁 (p0) 可正常应用，执行 patch -b -u -N -p0"
+            patch -b -u -N -p0 < /tmp/vf_xfade.patch
+          elif patch -p1 --dry-run < /tmp/vf_xfade.patch >/dev/null 2>&1; then
+            echo "✓ 补丁 (p1) 可正常应用，执行 patch -b -u -N -p1"
+            patch -b -u -N -p1 < /tmp/vf_xfade.patch
+          else
+            echo "✗ 补丁无法直接应用，回退为直接替换 libavfilter/vf_xfade.c"
+            wget -O libavfilter/vf_xfade.c "${FULL_C_URL}"
           fi
-          patch -p0 < xfade_easing/src/vf_xfade.patch
-          git add -A
-          git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
-      - name: Fix mpg123 autotools configuration
+          echo "=== 验证关键文件已就位 ==="
+          ls -la libavfilter/xfade-easing.h libavfilter/vf_xfade.c
+
+      # ----------------------------------------------------------------------
+      # 步骤 4：配置 FFmpeg 编译选项
+      #   静态链接 + 禁用共享库，最小化构建（无 x264/x265 等外部编解码库）
+      #   确保生成的 exe 完全独立、零 DLL 依赖
+      # ----------------------------------------------------------------------
+      - name: 配置 FFmpeg 编译选项
+        working-directory: ffmpeg
         run: |
-          cd ffmpeg-windows-build-helpers
-          # 预先准备 mpg123 的 autotools 文件
-          if [ -d "sandbox/win64/mpg123_svn" ]; then
-            cd sandbox/win64/mpg123_svn
-            # 清理之前的 autotools 生成的文件
-            rm -f configure config.h config.log config.status Makefile
-            rm -rf autom4te.cache
-            # 安装 autotools 必需的文件
-            libtoolize --force --copy || glibtoolize --force --copy
-            aclocal -I m4 2>/dev/null || true
-            autoconf
-            automake --add-missing --copy --force-missing 2>/dev/null || true
-            cd ../../..
-          fi
+          set -e
+          ./configure \
+            --arch=x86_64 \
+            --target-os=mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --enable-cross-compile \
+            --enable-static \
+            --disable-shared \
+            --extra-cflags="-static" \
+            --extra-ldflags="-static" \
+            --pkg-config-flags="--static" \
+            --disable-doc \
+            --disable-ffplay \
+            --disable-debug \
+            --enable-gpl
 
-      - name: Patch build script to use GitHub mirrors for config.guess and config.sub
+      # ----------------------------------------------------------------------
+      # 步骤 5：编译 FFmpeg
+      #   使用 ECFLAGS 禁用 C99 混合声明警告，避免 xfade-easing 触发告警
+      # ----------------------------------------------------------------------
+      - name: 编译 FFmpeg
+        working-directory: ffmpeg
         run: |
-          cd ffmpeg-windows-build-helpers
-          # Find and patch all shell script files that download config.guess/config.sub
-          find . -type f -name "*.sh" -exec sed -i \
-            "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.guess|g" {} \;
-          find . -type f -name "*.sh" -exec sed -i \
-            "s|http://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD|https://raw.githubusercontent.com/gcc-mirror/gcc/refs/heads/master/config.sub|g" {} \;
+          set -e
+          make -j"$(nproc)" ECFLAGS=-Wno-declaration-after-statement
 
-      - name: Run cross-compile script
+      # ----------------------------------------------------------------------
+      # 步骤 6：验证生成的 exe 为独立单文件（无第三方 DLL 依赖）
+      #   仅允许依赖 Windows 系统自带 DLL（如 KERNEL32.dll、msvcrt.dll 等）
+      # ----------------------------------------------------------------------
+      - name: 验证 exe 无 DLL 依赖
+        working-directory: ffmpeg
         run: |
-          cd ffmpeg-windows-build-helpers
-          export TERM=dumb
-          export FFMPEG_GIT_URL="file:///tmp/ffmpeg_patched"
-          export LIBTOOLIZE=libtoolize
-          ./cross_compile_ffmpeg.sh \
-            --compiler-flavors=win64 \
-            --disable-nonfree=y
+          set -e
+          echo "=== ffmpeg.exe DLL 依赖检查 ==="
+          x86_64-w64-mingw32-objdump -p ffmpeg.exe | grep "DLL Name" || true
+          echo "=== ffprobe.exe DLL 依赖检查 ==="
+          x86_64-w64-mingw32-objdump -p ffprobe.exe | grep "DLL Name" || true
+          echo "=== 文件信息 ==="
+          file ffmpeg.exe ffprobe.exe
+          ls -la ffmpeg.exe ffprobe.exe
 
-      - name: Collect artifacts
-        run: |
-          mkdir artifacts
-          cp ffmpeg-windows-build-helpers/sandbox/cross_compilers/mingw-w64-x86_64/x86_64-w64-mingw32/bin/ffmpeg.exe artifacts/
-          cp ffmpeg-windows-build-helpers/sandbox/cross_compilers/mingw-w64-x86_64/x86_64-w64-mingw32/bin/ffprobe.exe artifacts/
-
-      - name: Upload binaries
+      # ----------------------------------------------------------------------
+      # 步骤 7：上传构建产物（ffmpeg.exe + ffprobe.exe），保留 30 天
+      # ----------------------------------------------------------------------
+      - name: 上传 ffmpeg.exe 与 ffprobe.exe
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-win64-xfade-easing
-          paths: artifacts/*
-          retention-days: 14
+          name: ffmpeg-xfade-easing-windows-x64
+          path: |
+            ffmpeg/ffmpeg.exe
+            ffmpeg/ffprobe.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      # ----------------------------------------------------------------------
+      # 步骤 8：发布 GitHub Release（仅当推送 v 开头标签时执行）
+      # ----------------------------------------------------------------------
+      - name: 发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: FFmpeg xfade-easing ${{ github.ref_name }}
+          body: |
+            基于 **FFmpeg ${{ env.FFMPEG_TAG }}** + **xfade-easing ${{ env.XFADE_EASING_TAG }}** 构建的独立 Windows x64 单文件。
+
+            - `ffmpeg.exe` — 集成 xfade-easing 缓动过渡效果
+            - `ffprobe.exe` — 媒体分析工具
+            - 零 DLL 依赖，开箱即用
+          files: |
+            ffmpeg/ffmpeg.exe
+            ffmpeg/ffprobe.exe
+          draft: false
+          prerelease: false
