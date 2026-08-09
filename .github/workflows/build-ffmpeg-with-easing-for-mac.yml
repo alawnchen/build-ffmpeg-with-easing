@@ -192,7 +192,7 @@ jobs:
       - name: 编译 libx265 (CMake 多位深静态原生编译)
         run: |
           set -e
-          git clone --depth 1 --branch 3.5 https://github.com/videolan/x265.git /tmp/x265
+          git clone --depth 1 --branch 3.5 https://bitbucket.org/multicoreware/x265_git.git /tmp/x265
           cd /tmp/x265
 
           # 修复新版 GCC/Clang 的 C++ 兼容性问题
