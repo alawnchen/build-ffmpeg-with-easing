@@ -336,7 +336,6 @@ jobs:
           strip = 'x86_64-w64-mingw32-strip'
           windres = 'x86_64-w64-mingw32-windres'
           pkg-config = 'pkg-config'
-          exe_wrapper = ['env', 'WINEPREFIX=/tmp/wineprefix', 'WINEDEBUG=-all', 'wine64']
 
           [properties]
           needs_exe_wrapper = true
@@ -347,9 +346,6 @@ jobs:
           cpu = 'x86_64'
           endian = 'little'
           MESONEOF
-
-          # 初始化 wine prefix（避免构建时首次运行交互式提示）
-          WINEPREFIX=/tmp/wineprefix WINEDEBUG=-all wine64 wineboot --init 2>/dev/null || true
 
       # ----------------------------------------------------------------------
       # 步骤 9：编译 libfreetype（autotools，先不带 harfbuzz 以打破循环依赖）
