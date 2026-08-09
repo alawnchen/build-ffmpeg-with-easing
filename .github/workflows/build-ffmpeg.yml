@@ -32,12 +32,12 @@ jobs:
           git clone https://github.com/scriptituk/xfade-easing.git xfade_easing
           cp xfade_easing/src/xfade-easing.h libavfilter/
           echo "::group::Check patch applicability"
-          if ! patch --dry-run -p1 < xfade_easing/src/vf_xfade.patch; then
+          if ! patch --dry-run -p0 < xfade_easing/src/vf_xfade.patch; then
             echo "::error::Patch does not apply cleanly. Check FFmpeg version."
             exit 1
           fi
           echo "::endgroup::"
-          patch -p1 < xfade_easing/src/vf_xfade.patch
+          patch -p0 < xfade_easing/src/vf_xfade.patch
           git add -A
           git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
