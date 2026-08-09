@@ -355,18 +355,18 @@ jobs:
           PKG_CONFIG_LIBDIR: ${{ env.DEPS_PREFIX }}/lib/pkgconfig
         run: |
           set -e
-          # 优先 savannah 官方 tarball（自带 configure）；失败则回退 GitHub tag tarball
-          if wget -q https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz -O /tmp/freetype.tar.xz; then
-            FT_TARBALL=/tmp/freetype.tar.xz
+          # 优先 git clone（含 dlg 子模块，避免 tarball 缺少 .git 导致 git submodule update 失败）
+          if git clone --depth 1 --branch VER-2-14-3 --recursive --shallow-submodules https://github.com/freetype/freetype.git /tmp/freetype-src; then
+            cd /tmp/freetype-src
+            # git 源码需 autogen 生成 configure
+            ./autogen.sh
           else
-            echo "savannah 下载失败，回退到 GitHub 镜像 tarball"
-            wget -q -O /tmp/freetype.tar.gz https://github.com/freetype/freetype/archive/refs/tags/VER-2-14-3.tar.gz
-            FT_TARBALL=/tmp/freetype.tar.gz
+            echo "git clone 失败，回退到 savannah 官方 tarball（自带 configure 和 dlg 源码）"
+            wget -q --tries=3 --timeout=30 https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz -O /tmp/freetype.tar.xz
+            mkdir -p /tmp/freetype-src && tar -xf /tmp/freetype.tar.xz -C /tmp/freetype-src --strip-components=1
+            cd /tmp/freetype-src
+            # savannah tarball 自带 configure，无需 autogen
           fi
-          mkdir -p /tmp/freetype-src && tar -xf "${FT_TARBALL}" -C /tmp/freetype-src --strip-components=1
-          cd /tmp/freetype-src
-          # GitHub tag tarball 不含 configure 时需先 autogen
-          [ -x ./configure ] || ./autogen.sh
           ./configure \
             --host=x86_64-w64-mingw32 \
             --prefix=${DEPS_PREFIX} \
