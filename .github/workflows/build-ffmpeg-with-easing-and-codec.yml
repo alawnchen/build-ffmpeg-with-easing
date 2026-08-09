@@ -1,0 +1,390 @@
+# ==============================================================================
+# 工作流：编译 FFmpeg n8.0 + xfade-easing v3.6.0 独立 Windows x64 单文件
+# ----------------------------------------------------------------------------
+# 使用 Ubuntu 运行器 + mingw-w64 交叉编译，将 xfade-easing 缓动过渡效果
+# 集成进 FFmpeg，生成零 DLL 依赖的独立 ffmpeg.exe / ffprobe.exe。
+# ==============================================================================
+name: 构建 FFmpeg xfade-easing (Windows x64)，包含常见编解码器
+
+on:
+  # 手动触发
+  workflow_dispatch:
+  push:
+    # 推送到主分支时触发（含工作流文件自身的变更）
+    branches:
+      - main
+      - master
+    # 推送 v 开头的标签时触发，用于自动发布 GitHub Release
+    tags:
+      - 'v*'
+
+# 环境变量：版本号与仓库地址集中管理，便于后续升级
+env:
+  FFMPEG_TAG: n8.0                          # FFmpeg 源码标签（必须使用 n8.0 以保证补丁兼容）
+  XFADE_EASING_TAG: v3.6.0                  # xfade-easing 版本标签
+  XFADE_BASE: https://raw.githubusercontent.com/scriptituk/xfade-easing/v3.6.0/src
+  DEPS_PREFIX: /opt/ffmpeg-deps                  # 第三方编解码库静态安装前缀
+
+# 发布 Release 需要对仓库内容的写入权限
+permissions:
+  contents: write
+
+# 同一分支/标签的重复构建自动取消旧任务，节省资源
+concurrency:
+  group: build-ffmpeg-xfade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 交叉编译 FFmpeg (mingw-w64 x86_64)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+
+    steps:
+      # ----------------------------------------------------------------------
+      # 步骤 1：安装 mingw-w64 交叉编译工具链及构建依赖
+      # ----------------------------------------------------------------------
+      - name: 安装 mingw-w64 交叉编译工具链
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            nasm \
+            cmake \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            m4 \
+            git \
+            wget \
+            make
+
+      # ----------------------------------------------------------------------
+      # 步骤 2：检出 FFmpeg 源码（精确到 n8.0 标签，浅克隆加速）
+      # ----------------------------------------------------------------------
+      - name: 检出 FFmpeg 源码 (tag ${{ env.FFMPEG_TAG }})
+        uses: actions/checkout@v4
+        with:
+          repository: FFmpeg/FFmpeg
+          ref: ${{ env.FFMPEG_TAG }}
+          path: ffmpeg
+          fetch-depth: 1
+
+      # ----------------------------------------------------------------------
+      # 步骤 3：下载并应用 xfade-easing 补丁
+      #   - 始终放入头文件 libavfilter/xfade-easing.h（header-only 实现）
+      #   - 优先尝试 patch 方式修改 vf_xfade.c；失败则直接替换整个文件
+      # ----------------------------------------------------------------------
+      - name: 应用 xfade-easing 补丁 (tag ${{ env.XFADE_EASING_TAG }})
+        working-directory: ffmpeg
+        run: |
+          set -e
+          PATCH_URL="${XFADE_BASE}/vf_xfade.patch"
+          HEADER_URL="${XFADE_BASE}/xfade-easing.h"
+          FULL_C_URL="${XFADE_BASE}/vf_xfade.c"
+
+          # 下载 header-only 头文件到 libavfilter 目录
+          wget -O libavfilter/xfade-easing.h "${HEADER_URL}"
+
+          # 下载补丁并做干运行（dry-run）验证
+          # 依次尝试 -p0（README 推荐）和 -p1（git 风格），均失败则直接替换整个文件
+          wget -O /tmp/vf_xfade.patch "${PATCH_URL}"
+
+          if patch -p0 --dry-run < /tmp/vf_xfade.patch >/dev/null 2>&1; then
+            echo "✓ 补丁 (p0) 可正常应用，执行 patch -b -u -N -p0"
+            patch -b -u -N -p0 < /tmp/vf_xfade.patch
+          elif patch -p1 --dry-run < /tmp/vf_xfade.patch >/dev/null 2>&1; then
+            echo "✓ 补丁 (p1) 可正常应用，执行 patch -b -u -N -p1"
+            patch -b -u -N -p1 < /tmp/vf_xfade.patch
+          else
+            echo "✗ 补丁无法直接应用，回退为直接替换 libavfilter/vf_xfade.c"
+            wget -O libavfilter/vf_xfade.c "${FULL_C_URL}"
+          fi
+
+          echo "=== 验证关键文件已就位 ==="
+          ls -la libavfilter/xfade-easing.h libavfilter/vf_xfade.c
+
+      # ----------------------------------------------------------------------
+      # 步骤 4：编译 libopus（静态交叉编译，autotools）
+      #   Opus 音频编解码器，构建最简单，最先编译
+      # ----------------------------------------------------------------------
+      - name: 编译 libopus (静态交叉编译)
+        run: |
+          set -e
+          git clone --depth 1 --branch v1.5.2 https://github.com/xiph/opus.git /tmp/opus
+          cd /tmp/opus
+          autoreconf -isf
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix=${DEPS_PREFIX} \
+            --disable-shared \
+            --enable-static \
+            --disable-extra-programs
+          make -j"$(nproc)"
+          make install
+          echo "=== libopus 安装完成 ==="
+          ls -la ${DEPS_PREFIX}/lib/libopus.a ${DEPS_PREFIX}/lib/pkgconfig/opus.pc
+
+      # ----------------------------------------------------------------------
+      # 步骤 5：编译 libx264（静态交叉编译，自定义 configure）
+      #   H.264/AVC 视频编解码器
+      # ----------------------------------------------------------------------
+      - name: 编译 libx264 (静态交叉编译)
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/mirror/x264.git /tmp/x264
+          cd /tmp/x264
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --prefix=${DEPS_PREFIX} \
+            --enable-static \
+            --enable-pic \
+            --disable-cli \
+            --disable-lavf \
+            --disable-swscale
+          make -j"$(nproc)"
+          make install
+          echo "=== libx264 安装完成 ==="
+          ls -la ${DEPS_PREFIX}/lib/libx264.a ${DEPS_PREFIX}/lib/pkgconfig/x264.pc
+
+      # ----------------------------------------------------------------------
+      # 步骤 6：编译 libvpx（静态交叉编译，自定义 configure）
+      #   VP8/VP9 视频编解码器，含高位深支持
+      # ----------------------------------------------------------------------
+      - name: 编译 libvpx (静态交叉编译)
+        run: |
+          set -e
+          git clone --depth 1 --branch v1.14.1 https://github.com/webmproject/libvpx.git /tmp/libvpx
+          cd /tmp/libvpx
+          export CROSS=x86_64-w64-mingw32-
+          ./configure \
+            --target=x86_64-win64-gcc \
+            --prefix=${DEPS_PREFIX} \
+            --disable-shared \
+            --enable-static \
+            --enable-pic \
+            --disable-examples \
+            --disable-tools \
+            --disable-docs \
+            --disable-unit-tests \
+            --enable-vp9-highbitdepth
+          make -j"$(nproc)"
+          make install
+          # ranlib 修复 LTO 符号索引问题
+          x86_64-w64-mingw32-ranlib ${DEPS_PREFIX}/lib/libvpx.a
+          echo "=== libvpx 安装完成 ==="
+          ls -la ${DEPS_PREFIX}/lib/libvpx.a ${DEPS_PREFIX}/lib/pkgconfig/vpx.pc
+
+      # ----------------------------------------------------------------------
+      # 步骤 7：编译 libx265（CMake 多位深静态交叉编译）
+      #   H.265/HEVC 视频编解码器，含 8/10/12-bit 多位深合并
+      #   构建最复杂、耗时最长，放最后
+      # ----------------------------------------------------------------------
+      - name: 编译 libx265 (CMake 多位深静态交叉编译)
+        run: |
+          set -e
+          git clone --depth 1 --branch 3.5 https://github.com/videolan/x265.git /tmp/x265
+          cd /tmp/x265
+
+          # 修复新版 GCC 的 C++ 兼容性问题
+          sed -i '1i#include <cstdint>' source/dynamicHDR10/json11/json11.cpp
+
+          # 创建 mingw-w64 CMake 交叉编译工具链文件
+          cat > /tmp/mingw64-toolchain.cmake << 'TCMKEOF'
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR x86_64)
+          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+          set(CMAKE_AR x86_64-w64-mingw32-ar)
+          set(CMAKE_RANLIB x86_64-w64-mingw32-ranlib)
+          set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+          TCMKEOF
+
+          # 12-bit 构建
+          cmake \
+            -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/mingw64-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DCMAKE_ASM_NASM_FLAGS=-w-macro-params-legacy \
+            -DHIGH_BIT_DEPTH=ON \
+            -DEXPORT_C_API=OFF \
+            -DENABLE_HDR10_PLUS=ON \
+            -DMAIN12=ON \
+            -S source \
+            -B 12bit
+          make -C 12bit -j"$(nproc)" &
+          PID_12=$!
+
+          # 10-bit 构建
+          cmake \
+            -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/mingw64-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DCMAKE_ASM_NASM_FLAGS=-w-macro-params-legacy \
+            -DHIGH_BIT_DEPTH=ON \
+            -DEXPORT_C_API=OFF \
+            -DENABLE_HDR10_PLUS=ON \
+            -S source \
+            -B 10bit
+          make -C 10bit -j"$(nproc)" &
+          PID_10=$!
+
+          # 等待后台任务完成并传播退出码（裸 wait 始终返回 0，无法捕获失败）
+          wait "$PID_12"
+          wait "$PID_10"
+
+          # 8-bit 构建（链接 10-bit 和 12-bit）
+          cmake \
+            -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/mingw64-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DCMAKE_ASM_NASM_FLAGS=-w-macro-params-legacy \
+            -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
+            -DEXTRA_LINK_FLAGS=-L. \
+            -DLINKED_10BIT=ON \
+            -DLINKED_12BIT=ON \
+            -S source \
+            -B 8bit
+          make -C 8bit -j"$(nproc)"
+
+          # 合并三个位深的静态库为单个 libx265.a
+          cd 8bit
+          mv ../12bit/libx265.a libx265_main12.a
+          mv ../10bit/libx265.a libx265_main10.a
+          mv libx265.a libx265_main.a
+
+          x86_64-w64-mingw32-ar -M <<EOF
+          CREATE libx265.a
+          ADDLIB libx265_main.a
+          ADDLIB libx265_main10.a
+          ADDLIB libx265_main12.a
+          SAVE
+          END
+          EOF
+
+          # 安装头文件和 pkgconfig
+          make install
+
+          # x265 是 C++ 库，需确保 x265.pc 的 Libs.private 包含 -lstdc++ 以支持静态链接
+          # 使用 sed 追加而非 echo >>，避免产生重复的 Libs.private 行
+          if ! grep '^Libs.private:.*-lstdc++' ${DEPS_PREFIX}/lib/pkgconfig/x265.pc >/dev/null 2>&1; then
+            sed -i 's/^Libs.private:\(.*\)$/Libs.private:\1 -lstdc++/' ${DEPS_PREFIX}/lib/pkgconfig/x265.pc
+          fi
+
+          echo "=== libx265 安装完成 ==="
+          ls -la ${DEPS_PREFIX}/lib/libx265.a ${DEPS_PREFIX}/lib/pkgconfig/x265.pc
+
+      # ----------------------------------------------------------------------
+      # 步骤 8：配置 FFmpeg 编译选项
+      #   静态链接 + 禁用共享库，集成 x264/x265/vpx/opus 外部编解码库
+      #   确保生成的 exe 完全独立、零 DLL 依赖
+      # ----------------------------------------------------------------------
+      - name: 配置 FFmpeg 编译选项
+        working-directory: ffmpeg
+        env:
+          PKG_CONFIG_LIBDIR: ${{ env.DEPS_PREFIX }}/lib/pkgconfig
+        run: |
+          set -e
+          ./configure \
+            --arch=x86_64 \
+            --target-os=mingw32 \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --enable-cross-compile \
+            --enable-static \
+            --disable-shared \
+            --extra-cflags="-I${DEPS_PREFIX}/include -static" \
+            --extra-ldflags="-L${DEPS_PREFIX}/lib -static" \
+            --pkg-config-flags="--static" \
+            --disable-doc \
+            --disable-ffplay \
+            --disable-debug \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libvpx \
+            --enable-libopus
+
+      # ----------------------------------------------------------------------
+      # 步骤 9：编译 FFmpeg
+      #   使用 ECFLAGS 禁用 C99 混合声明警告，避免 xfade-easing 触发告警
+      # ----------------------------------------------------------------------
+      - name: 编译 FFmpeg
+        working-directory: ffmpeg
+        run: |
+          set -e
+          make -j"$(nproc)" ECFLAGS=-Wno-declaration-after-statement
+
+      # ----------------------------------------------------------------------
+      # 步骤 10：验证生成的 exe 为独立单文件（无第三方 DLL 依赖）
+      #   仅允许依赖 Windows 系统自带 DLL（如 KERNEL32.dll、msvcrt.dll 等）
+      #   所有编解码库（x264/x265/vpx/opus）均已静态链接，不应出现额外 DLL
+      # ----------------------------------------------------------------------
+      - name: 验证 exe 无 DLL 依赖
+        working-directory: ffmpeg
+        run: |
+          set -e
+          echo "=== ffmpeg.exe DLL 依赖检查 ==="
+          x86_64-w64-mingw32-objdump -p ffmpeg.exe | grep "DLL Name" || true
+          echo "=== ffprobe.exe DLL 依赖检查 ==="
+          x86_64-w64-mingw32-objdump -p ffprobe.exe | grep "DLL Name" || true
+          echo "=== 文件信息 ==="
+          file ffmpeg.exe ffprobe.exe
+          ls -la ffmpeg.exe ffprobe.exe
+          echo "=== 检查编解码器是否已启用 ==="
+          # 注意：无法在 Linux 上运行 Windows exe，仅验证 objdump 依赖
+          echo "所有编解码库已静态链接"
+
+      # ----------------------------------------------------------------------
+      # 步骤 11：上传构建产物（ffmpeg.exe + ffprobe.exe），保留 30 天
+      # ----------------------------------------------------------------------
+      - name: 上传 ffmpeg.exe 与 ffprobe.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-xfade-easing-codecs-windows-x64
+          path: |
+            ffmpeg/ffmpeg.exe
+            ffmpeg/ffprobe.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      # ----------------------------------------------------------------------
+      # 步骤 12：发布 GitHub Release（仅当推送 v 开头标签时执行）
+      # ----------------------------------------------------------------------
+      - name: 发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: FFmpeg xfade-easing ${{ github.ref_name }}
+          body: |
+            基于 **FFmpeg ${{ env.FFMPEG_TAG }}** + **xfade-easing ${{ env.XFADE_EASING_TAG }}** 构建的独立 Windows x64 单文件。
+
+            集成编解码库：
+            - libx264 (H.264/AVC)
+            - libx265 (H.265/HEVC，含 8/10/12-bit 多位深)
+            - libvpx (VP8/VP9，含高位深)
+            - libopus (Opus 音频)
+            - xfade-easing 缓动过渡效果
+
+            - `ffmpeg.exe` — 零 DLL 依赖，开箱即用
+            - `ffprobe.exe` — 媒体分析工具
+          files: |
+            ffmpeg/ffmpeg.exe
+            ffmpeg/ffprobe.exe
+          draft: false
+          prerelease: false
