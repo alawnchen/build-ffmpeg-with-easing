@@ -7,9 +7,6 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      # ----------------------------------------------
-      # 1. 安装系统依赖（交叉编译器 & 构建工具）
-      # ----------------------------------------------
       - name: Install build dependencies
         run: |
           sudo apt update
@@ -22,62 +19,37 @@ jobs:
             autoconf automake libtool      \
             patch
 
-      # ----------------------------------------------
-      # 2. 克隆官方编译辅助脚本
-      # ----------------------------------------------
       - name: Clone ffmpeg-windows-build-helpers
-        run: |
-          git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
+        run: git clone https://github.com/rdp/ffmpeg-windows-build-helpers.git
 
-      # ----------------------------------------------
-      # 3. 准备打过 xfade-easing 补丁的 FFmpeg 源码
-      #    （作为本地 git 仓库，供脚本直接拉取）
-      # ----------------------------------------------
       - name: Prepare patched FFmpeg source
         run: |
           set -e
-          # 克隆与你补丁兼容的 FFmpeg 版本（此处用 n8.0，如有必要可更换）
           git clone --depth 1 --branch n8.0 \
             https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg_patched
           cd /tmp/ffmpeg_patched
-
-          # 获取 xfade-easing 补丁并应用
           git clone https://github.com/scriptituk/xfade-easing.git xfade_easing
           cp xfade_easing/src/xfade-easing.h libavfilter/
-          echo "::group::Check patch applicability"
-          # 该补丁用 p0 即可
           if ! patch --dry-run -p0 < xfade_easing/src/vf_xfade.patch; then
             echo "::error::Patch does not apply cleanly. Check FFmpeg version."
             exit 1
           fi
-          echo "::endgroup::"
           patch -p0 < xfade_easing/src/vf_xfade.patch
-
-          # 提交修改，使该目录成为一个干净的 git 仓库（脚本会 clone 它）
           git add -A
           git -c user.name="CI" -c user.email="ci@localhost" commit -m "apply xfade-easing"
 
-      # ----------------------------------------------
-      # 4. 执行交叉编译
-      #    - 通过环境变量 FFMPEG_GIT_URL 使用我们打过补丁的源码
-      #    - 脚本默认就会编译 x264, x265, libvpx (VP8/VP9)
-      #    - 明确禁用大型/非必需组件以节省时间与空间
-      # ----------------------------------------------
+      # 先输出脚本帮助，确认真实可用参数（可选）
+      - name: Show script help
+        run: cd ffmpeg-windows-build-helpers && ./cross_compile_ffmpeg.sh --help || true
+
       - name: Run cross-compile script
         run: |
           cd ffmpeg-windows-build-helpers
-          # 脚本会通过 git clone $FFMPEG_GIT_URL 获取源码
           export FFMPEG_GIT_URL="file:///tmp/ffmpeg_patched"
           ./cross_compile_ffmpeg.sh \
-            --compiler-flavors=win64   \
-            --disable-nonfree=y        \
-            --high-bitdepth=n          \
-            --build-intel-qsv=n        \
-            --build-amd-amf=n
+            --compiler-flavors=win64 \
+            --disable-nonfree=y
 
-      # ----------------------------------------------
-      # 5. 收集编译产物并上传
-      # ----------------------------------------------
       - name: Collect artifacts
         run: |
           mkdir artifacts
