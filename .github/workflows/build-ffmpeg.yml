@@ -45,9 +45,37 @@ jobs:
         run: |
           mkdir -p ffmpeg-windows-build-helpers/sandbox/cross_compilers/pkgs
           cd ffmpeg-windows-build-helpers/sandbox/cross_compilers/pkgs
-          wget -nv -O config.guess 'https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess' || \
-          wget -nv -O config.guess 'https://raw.githubusercontent.com/autoconf-mirror/autoconf/master/build-aux/config.guess' || \
-          echo "Warning: Failed to pre-download config.guess, will rely on script's fallback"
+          
+          # Try GitHub mirrors with retries to handle transient failures
+          success=0
+          
+          # Try gcc-mirror first
+          for i in {1..3}; do
+            if wget -nv -O config.guess 'https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess'; then
+              success=1
+              break
+            fi
+            if [ $i -lt 3 ]; then
+              sleep $((2**i))
+            fi
+          done
+          
+          # Try autoconf-mirror if gcc-mirror failed
+          if [ $success -eq 0 ]; then
+            for i in {1..3}; do
+              if wget -nv -O config.guess 'https://raw.githubusercontent.com/autoconf-mirror/autoconf/master/build-aux/config.guess'; then
+                success=1
+                break
+              fi
+              if [ $i -lt 3 ]; then
+                sleep $((2**i))
+              fi
+            done
+          fi
+          
+          if [ $success -eq 0 ]; then
+            echo "Warning: Failed to pre-download config.guess, will rely on script's fallback"
+          fi
 
       - name: Fix mpg123 autotools configuration
         run: |
