@@ -623,8 +623,19 @@ jobs:
           export WINEDEBUG=-all
           export WINEDLLOVERRIDES="mscoree,mshtml="
 
+          # 初始化 wine prefix（首次运行需要创建，避免后续命令失败）
+          WINEPREFIX=/tmp/wineprefix WINEDEBUG=-all wine64 wineboot --init 2>/dev/null || true
+
+          # sanity check：确认 wine64 能运行 ffmpeg.exe
+          echo "=== wine64 sanity check ==="
+          wine64 ffmpeg.exe -version 2>&1 | head -3 \
+            || { echo "✗ wine64 无法运行 ffmpeg.exe，检查 wine 环境配置"; exit 1; }
+
           echo "=== 判据 1：xfade 滤镜出现 easing/reverse 选项（补丁生效）==="
-          wine64 ffmpeg.exe -hide_banner -h filter=xfade 2>/dev/null | grep -iE 'easing|reverse' \
+          wine64 ffmpeg.exe -hide_banner -h filter=xfade > /tmp/xfade_help.txt 2>&1
+          echo "--- xfade 滤镜帮助输出（前 30 行）---"
+          head -30 /tmp/xfade_help.txt
+          grep -iE 'easing|reverse' /tmp/xfade_help.txt \
             || { echo "✗ 未发现 easing/reverse 选项，补丁未生效"; exit 1; }
           echo "✓ 补丁生效（easing/reverse 选项已注册）"
 
