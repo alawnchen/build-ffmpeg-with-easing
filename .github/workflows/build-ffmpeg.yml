@@ -575,6 +575,7 @@ jobs:
           echo "✓ pkg-config 成功解析 libass（含全部静态依赖）"
           echo ""
           ./configure \
+            --pkg-config=pkg-config \
             --arch=x86_64 \
             --target-os=mingw32 \
             --cross-prefix=x86_64-w64-mingw32- \
