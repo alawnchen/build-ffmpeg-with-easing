@@ -322,7 +322,37 @@ jobs:
           ls -la ${DEPS_PREFIX}/lib/libx265.a ${DEPS_PREFIX}/lib/pkgconfig/x265.pc
 
       # ----------------------------------------------------------------------
-      # 步骤 8：创建 meson 交叉编译文件
+      # 步骤 8：编译 libmp3lame（autotools 静态交叉编译）
+      #   MP3 音频编码库，无外部依赖
+      # ----------------------------------------------------------------------
+      - name: 编译 libmp3lame (静态交叉编译)
+        run: |
+          set -e
+          # 多源下载：SourceForge 官方，回退 SourceForge 镜像
+          if wget -q --tries=3 --timeout=30 -O /tmp/lame.tar.gz \
+            "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz"; then
+            echo "✓ 使用 SourceForge tarball (lame 3.100)"
+          else
+            echo "SourceForge 下载失败，回退到 SourceForge 镜像 URL"
+            wget -q -O /tmp/lame.tar.gz \
+              "https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download"
+          fi
+          mkdir -p /tmp/lame-src && tar -xf /tmp/lame.tar.gz -C /tmp/lame-src --strip-components=1
+          cd /tmp/lame-src
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix=${DEPS_PREFIX} \
+            --disable-shared \
+            --enable-static \
+            --disable-frontend \
+            --disable-nasm
+          make -j"$(nproc)"
+          make install
+          echo "=== libmp3lame 安装完成 ==="
+          ls -la ${DEPS_PREFIX}/lib/libmp3lame.a ${DEPS_PREFIX}/include/lame/lame.h
+
+      # ----------------------------------------------------------------------
+      # 步骤 9：创建 meson 交叉编译文件
       #   供 fribidi/harfbuzz/fontconfig 等 meson 构建系统使用
       # ----------------------------------------------------------------------
       - name: 创建 meson 交叉编译文件
@@ -348,7 +378,7 @@ jobs:
           MESONEOF
 
       # ----------------------------------------------------------------------
-      # 步骤 9：编译 libfreetype（autotools，先不带 harfbuzz 以打破循环依赖）
+      # 步骤 10：编译 libfreetype（autotools，先不带 harfbuzz 以打破循环依赖）
       #   ASS 字幕渲染所需的字体光栅化库
       # ----------------------------------------------------------------------
       - name: 编译 libfreetype (静态交叉编译)
@@ -382,7 +412,7 @@ jobs:
           echo "=== libfreetype 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 10：编译 libfribidi（meson）
+      # 步骤 11：编译 libfribidi（meson）
       #   Unicode 双向文本（BiDi）处理库，ASS 字幕渲染依赖
       # ----------------------------------------------------------------------
       - name: 编译 libfribidi (静态交叉编译)
@@ -404,7 +434,7 @@ jobs:
           echo "=== libfribidi 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 11：编译 libunibreak（autotools，libass 0.17 必需依赖）
+      # 步骤 12：编译 libunibreak（autotools，libass 0.17 必需依赖）
       #   Unicode 换行算法库
       # ----------------------------------------------------------------------
       - name: 编译 libunibreak (静态交叉编译)
@@ -424,7 +454,7 @@ jobs:
           echo "=== libunibreak 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 12：编译 libharfbuzz（meson，依赖 freetype）
+      # 步骤 13：编译 libharfbuzz（meson，依赖 freetype）
       #   文本整形（shaping）引擎
       # ----------------------------------------------------------------------
       - name: 编译 libharfbuzz (静态交叉编译)
@@ -457,7 +487,7 @@ jobs:
           echo "=== libharfbuzz 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 13：编译 expat（autotools，fontconfig 的 XML 后端依赖）
+      # 步骤 14：编译 expat（autotools，fontconfig 的 XML 后端依赖）
       # ----------------------------------------------------------------------
       - name: 编译 expat (静态交叉编译)
         run: |
@@ -478,7 +508,7 @@ jobs:
           echo "=== expat 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 14：编译 fontconfig（meson，expat 后端）
+      # 步骤 15：编译 fontconfig（meson，expat 后端）
       #   字体发现与配置库
       # ----------------------------------------------------------------------
       - name: 编译 fontconfig (静态交叉编译)
@@ -512,7 +542,7 @@ jobs:
           echo "=== fontconfig 安装完成 ==="
 
       # ----------------------------------------------------------------------
-      # 步骤 15：编译 libass（autotools，依赖以上全部字幕相关库）
+      # 步骤 16：编译 libass（autotools，依赖以上全部字幕相关库）
       #   ASS/SSA 字幕渲染库
       # ----------------------------------------------------------------------
       - name: 编译 libass (静态交叉编译)
@@ -534,7 +564,7 @@ jobs:
           ls -la ${DEPS_PREFIX}/lib/libass.a ${DEPS_PREFIX}/lib/pkgconfig/libass.pc
 
       # ----------------------------------------------------------------------
-      # 步骤 16：配置 FFmpeg 编译选项
+      # 步骤 17：配置 FFmpeg 编译选项
       #   静态链接 + 禁用共享库，集成 x264/x265/vpx/opus 外部编解码库
       #   及 libass 字幕渲染栈，确保生成的 exe 完全独立、零 DLL 依赖
       # ----------------------------------------------------------------------
@@ -593,6 +623,7 @@ jobs:
             --enable-libx265 \
             --enable-libvpx \
             --enable-libopus \
+            --enable-libmp3lame \
             --enable-libass \
             --enable-libfreetype \
             --enable-libfribidi \
@@ -600,7 +631,7 @@ jobs:
             --enable-fontconfig
 
       # ----------------------------------------------------------------------
-      # 步骤 17：编译 FFmpeg
+      # 步骤 18：编译 FFmpeg
       #   使用 ECFLAGS 禁用 C99 混合声明警告，避免 xfade-easing 触发告警
       # ----------------------------------------------------------------------
       - name: 编译 FFmpeg
@@ -610,7 +641,7 @@ jobs:
           make -j"$(nproc)" ECFLAGS=-Wno-declaration-after-statement
 
       # ----------------------------------------------------------------------
-      # 步骤 18：功能验证 —— 在 wine 下实际运行 exe，证明 GL 转场可用
+      # 步骤 19：功能验证 —— 在 wine 下实际运行 exe，证明 GL 转场可用
       #   判据 1：-h filter=xfade 出现 easing/reverse 选项（补丁生效）
       #   判据 2：用 gl_Swirl 实际渲染一段转场（GL 转场真正执行）
       #   注意：gl_* 转场为运行时字符串解析，不会出现在 -h 的 transition 枚举列表中
@@ -649,7 +680,7 @@ jobs:
           echo "✓ GL 转场 (gl_Swirl) 渲染成功 —— GL 转场已完整可用"
 
       # ----------------------------------------------------------------------
-      # 步骤 19：验证生成的 exe 为独立单文件（无第三方 DLL 依赖）
+      # 步骤 20：验证生成的 exe 为独立单文件（无第三方 DLL 依赖）
       #   仅允许依赖 Windows 系统自带 DLL（如 KERNEL32.dll、msvcrt.dll 等）
       #   所有编解码库（x264/x265/vpx/opus）均已静态链接，不应出现额外 DLL
       # ----------------------------------------------------------------------
@@ -665,11 +696,11 @@ jobs:
           file ffmpeg.exe ffprobe.exe
           ls -la ffmpeg.exe ffprobe.exe
           echo "=== 检查编解码器是否已启用 ==="
-          # 编解码器静态链接已在步骤 18 的 wine 功能验证中实际运行确认
+          # 编解码器静态链接已在步骤 19 的 wine 功能验证中实际运行确认
           echo "所有编解码库已静态链接"
 
       # ----------------------------------------------------------------------
-      # 步骤 20：上传构建产物（ffmpeg.exe + ffprobe.exe），保留 30 天
+      # 步骤 21：上传构建产物（ffmpeg.exe + ffprobe.exe），保留 30 天
       # ----------------------------------------------------------------------
       - name: 上传 ffmpeg.exe 与 ffprobe.exe
         uses: actions/upload-artifact@v4
@@ -682,7 +713,7 @@ jobs:
           if-no-files-found: error
 
       # ----------------------------------------------------------------------
-      # 步骤 21：发布 GitHub Release（仅当推送 v 开头标签时执行）
+      # 步骤 22：发布 GitHub Release（仅当推送 v 开头标签时执行）
       # ----------------------------------------------------------------------
       - name: 发布 GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
