@@ -219,7 +219,7 @@ jobs:
       # ----------------------------------------------------------------------
       # 步骤 7：编译 libvpx（自定义 configure，双架构静态编译）
       #   VP8/VP9 视频编解码器，含高位深支持
-      #   注意：libvpx 的 target 不会自动附加 -arch，必须通过 CFLAGS 显式传递
+      #   注意：libvpx 的 target 不会自动附加 -arch，必须通过 --extra-cflags 显式传递
       # ----------------------------------------------------------------------
       - name: 编译 libvpx (arm64 + x86_64)
         run: |
@@ -245,7 +245,9 @@ jobs:
               --disable-docs \
               --disable-unit-tests \
               --enable-vp9-highbitdepth \
-              CFLAGS="-arch ${ARCH} -O3" CXXFLAGS="-arch ${ARCH} -O3" LDFLAGS="-arch ${ARCH}"
+              --extra-cflags="-arch ${ARCH} -O3" \
+              --extra-cxxflags="-arch ${ARCH} -O3" \
+              --extra-ldflags="-arch ${ARCH}"
             make -j"${JOBS}"
             make install
             # ranlib 刷新静态库符号索引
